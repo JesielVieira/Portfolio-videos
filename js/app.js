@@ -1339,6 +1339,8 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
             const splashSub = splash ? splash.querySelector('.splash-subtitle') : null;
             const logoContainer = document.querySelector('.logo-container');
             const logoCaret = document.querySelector('.logo-caret');
+            const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            const isCompactSplash = window.matchMedia('(max-width: 768px)').matches;
 
             document.documentElement.classList.add('splash-active');
             document.body.classList.add('splash-active');
@@ -1368,6 +1370,34 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
             siteContent.classList.add('hidden-for-splash');
             siteContent.style.visibility = '';
             siteContent.style.opacity = '';
+
+            const finishSplash = (cleanupDelay = 900) => {
+                setTimeout(() => {
+                    siteContent.classList.remove('hidden-for-splash');
+                    siteContent.classList.add('reveal-from-splash');
+                }, 120);
+
+                setTimeout(() => {
+                    logoContainer.classList.remove('invisible');
+                    splash.remove();
+                    siteContent.classList.remove('reveal-from-splash');
+                    document.documentElement.classList.remove('splash-active');
+                    document.body.classList.remove('splash-active');
+                    window.setTimeout(() => {
+                        if (logoCaret) logoCaret.classList.add('is-visible');
+                    }, 240);
+                    initLogoWordLoop(10000);
+                }, cleanupDelay);
+            };
+
+            if (prefersReducedMotion || isCompactSplash) {
+                setTimeout(() => {
+                    if (splashSub) splashSub.classList.add('fade-out');
+                    splash.classList.add('compact-exit');
+                    finishSplash(780);
+                }, isCompactSplash ? 1800 : 1400);
+                return;
+            }
 
             // After 2.5s, morph everything in one fluid shot
             setTimeout(() => {
@@ -1402,17 +1432,7 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
                 }, 200);
 
                 // 4) Clean up exactly when animation finishes
-                setTimeout(() => {
-                    logoContainer.classList.remove('invisible');
-                    splash.remove();
-                    siteContent.classList.remove('reveal-from-splash');
-                    document.documentElement.classList.remove('splash-active');
-                    document.body.classList.remove('splash-active');
-                    window.setTimeout(() => {
-                        if (logoCaret) logoCaret.classList.add('is-visible');
-                    }, 240);
-                    initLogoWordLoop(10000);
-                }, 1100);
+                finishSplash(1100);
             }, 2500);
         }
 

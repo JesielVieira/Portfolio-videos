@@ -3601,6 +3601,7 @@
             justify-content: center;
             flex-direction: column;
             overflow: hidden;
+            padding: 24px;
         }
 
         /* The background fades out in sync with the text motion */
@@ -3610,12 +3611,19 @@
             pointer-events: none;
         }
 
+        .splash-screen.compact-exit {
+            animation: splashCompactExit 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+            pointer-events: none;
+        }
+
         .splash-name {
             display: flex;
             align-items: center;
+            justify-content: center;
             gap: 0;
             overflow: visible;
             will-change: transform;
+            max-width: 100%;
             /* No CSS transition here - we use Web Animations API for zero-gap motion */
         }
 
@@ -3705,6 +3713,20 @@
             100% {
                 opacity: 0.7;
                 transform: translateY(0);
+            }
+        }
+
+        @keyframes splashCompactExit {
+            0% {
+                opacity: 1;
+                transform: scale(1);
+                filter: blur(0);
+            }
+
+            100% {
+                opacity: 0;
+                transform: scale(0.94) translateY(-12px);
+                filter: blur(8px);
             }
         }
 
@@ -3962,6 +3984,29 @@
         margin: 0 8px;
     }
 
+    .splash-screen {
+        padding: 20px;
+    }
+
+    .splash-first,
+    .splash-last {
+        font-size: clamp(2.8rem, 13vw, 5.4rem);
+        letter-spacing: -0.05em;
+    }
+
+    .splash-separator {
+        width: clamp(1.2rem, 4.5vw, 2.4rem);
+        height: clamp(0.18rem, 0.7vw, 0.34rem);
+        margin: 0 10px;
+    }
+
+    .splash-subtitle {
+        font-size: 0.78rem;
+        letter-spacing: 0.22em;
+        margin-top: 14px;
+        text-align: center;
+    }
+
     /* Hero text */
     .intro-text {
         font-size: 1rem;
@@ -4039,6 +4084,31 @@
 
     .site-header {
         padding: 24px 0 8px;
+    }
+
+    .splash-screen {
+        padding: 16px;
+    }
+
+    .splash-first,
+    .splash-last {
+        font-size: clamp(2.1rem, 14vw, 3.4rem);
+        line-height: 0.9;
+    }
+
+    .splash-separator {
+        width: 18px;
+        height: 3px;
+        margin: 0 8px;
+        box-shadow: 0 0 16px rgba(254, 206, 121, 0.16);
+    }
+
+    .splash-subtitle {
+        max-width: min(92vw, 320px);
+        font-size: 0.68rem;
+        letter-spacing: 0.16em;
+        line-height: 1.5;
+        margin-top: 12px;
     }
 
     /* Single column video grid */
