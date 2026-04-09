@@ -58,6 +58,8 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
         };
 
         const PREVIEW_TIME = 5;
+        const DEFAULT_WISTIA_VIDEO_VOLUME = 0.8;
+        const DEFAULT_WISTIA_AUDIO_VOLUME = 0.8;
         let currentFolder = null;
 
         function getVideosForSection(sectionId) {
@@ -272,10 +274,112 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
             return `https://fast.wistia.net/embed/iframe/${mediaId}?${params.toString()}`;
         }
 
-        const portfolioWistiaMediaCache = new Map();
-        const portfolioWistiaThumbCache = new Map();
-        const portfolioWistiaPlayableCache = new Map();
-        const portfolioVideoSourcePromises = new WeakMap();
+        const wistiaMediaCache = new Map();
+        const wistiaThumbCache = new Map();
+        const wistiaPlayableCache = new Map();
+        const wistiaVideoSourcePromises = new WeakMap();
+
+        function getWistiaAssetUrl(asset) {
+            return String(asset?.url || '');
+        }
+
+        function getWistiaAssetType(asset) {
+            return String(asset?.type || '').toLowerCase();
+        }
+
+        function getWistiaAssetExt(asset) {
+            return String(asset?.ext || '').toLowerCase();
+        }
+
+        function getWistiaAssetMetric(asset, key) {
+            const value = Number(asset?.[key]);
+            return Number.isFinite(value) ? value : 0;
+        }
+
+        function isWistiaNonHlsAsset(asset) {
+            const assetUrl = getWistiaAssetUrl(asset);
+            return assetUrl && !/\.m3u8(\?|$)/i.test(assetUrl);
+        }
+
+        function isWistiaAudioAsset(asset) {
+            const type = getWistiaAssetType(asset);
+            const ext = getWistiaAssetExt(asset);
+            return /audio/.test(type) || ['mp3', 'm4a', 'aac', 'wav', 'ogg'].includes(ext);
+        }
+
+        function isWistiaImageAsset(asset) {
+            const type = getWistiaAssetType(asset);
+            const ext = getWistiaAssetExt(asset);
+            return /still_image|storyboard/.test(type) || ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+        }
+
+        function isWistiaVideoAsset(asset) {
+            if (!isWistiaNonHlsAsset(asset) || isWistiaAudioAsset(asset) || isWistiaImageAsset(asset)) {
+                return false;
+            }
+
+            const type = getWistiaAssetType(asset);
+            const ext = getWistiaAssetExt(asset);
+            return /video/.test(type) || ext === 'mp4' || /original/.test(type);
+        }
+
+        function rankWistiaVideoAssets(a, b) {
+            return getWistiaAssetMetric(b, 'height') - getWistiaAssetMetric(a, 'height') ||
+                getWistiaAssetMetric(b, 'width') - getWistiaAssetMetric(a, 'width') ||
+                getWistiaAssetMetric(b, 'bitrate') - getWistiaAssetMetric(a, 'bitrate');
+        }
+
+        function rankWistiaAudioAssets(a, b) {
+            const getPriority = (asset) => {
+                const type = getWistiaAssetType(asset);
+                const ext = getWistiaAssetExt(asset);
+                if (/mp3_audio/.test(type)) return 3;
+                if (ext === 'mp3') return 2;
+                if (isWistiaAudioAsset(asset)) return 1;
+                if (/original/.test(type)) return 0;
+                return -1;
+            };
+
+            return getPriority(b) - getPriority(a) ||
+                getWistiaAssetMetric(b, 'bitrate') - getWistiaAssetMetric(a, 'bitrate');
+        }
+
+        function selectBestWistiaAsset(assets, kind = 'video') {
+            const playableAssets = (Array.isArray(assets) ? assets : []).filter(isWistiaNonHlsAsset);
+            if (playableAssets.length === 0) return null;
+
+            if (kind === 'audio') {
+                const audioCandidates = playableAssets
+                    .filter(asset => isWistiaAudioAsset(asset) || /original/.test(getWistiaAssetType(asset)))
+                    .sort(rankWistiaAudioAssets);
+
+                return audioCandidates[0] || playableAssets[0] || null;
+            }
+
+            const mp4VideoCandidates = playableAssets
+                .filter(asset => isWistiaVideoAsset(asset) && getWistiaAssetExt(asset) === 'mp4')
+                .sort(rankWistiaVideoAssets);
+
+            if (mp4VideoCandidates.length > 0) {
+                return mp4VideoCandidates[0];
+            }
+
+            const fallbackVideoCandidates = playableAssets
+                .filter(isWistiaVideoAsset)
+                .sort(rankWistiaVideoAssets);
+
+            return fallbackVideoCandidates[0] || playableAssets[0] || null;
+        }
+
+        function applyDefaultWistiaVideoVolume(video) {
+            if (!video) return;
+            video.volume = DEFAULT_WISTIA_VIDEO_VOLUME;
+        }
+
+        function applyDefaultWistiaAudioVolume(audio) {
+            if (!audio) return;
+            audio.volume = DEFAULT_WISTIA_AUDIO_VOLUME;
+        }
 
         function getCanonicalWistiaUrl(src) {
             const rawSrc = String(src || '').trim();
@@ -288,8 +392,8 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
             const mediaId = getWistiaMediaId(src);
             if (!mediaId) return null;
 
-            if (!portfolioWistiaMediaCache.has(mediaId)) {
-                portfolioWistiaMediaCache.set(
+            if (!wistiaMediaCache.has(mediaId)) {
+                wistiaMediaCache.set(
                     mediaId,
                     fetch(`https://fast.wistia.com/embed/medias/${mediaId}.json`)
                         .then(response => {
@@ -303,7 +407,7 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
                 );
             }
 
-            return portfolioWistiaMediaCache.get(mediaId);
+            return wistiaMediaCache.get(mediaId);
         }
 
         async function resolveWistiaPlayableUrl(src, kind = 'video') {
@@ -311,36 +415,16 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
             if (!mediaId) return String(src || '');
 
             const cacheKey = `${kind}:${mediaId}`;
-            if (portfolioWistiaPlayableCache.has(cacheKey)) {
-                return portfolioWistiaPlayableCache.get(cacheKey);
+            if (wistiaPlayableCache.has(cacheKey)) {
+                return wistiaPlayableCache.get(cacheKey);
             }
 
             const promise = fetchWistiaMediaData(src).then(data => {
                 const assets = Array.isArray(data?.media?.assets) ? data.media.assets : [];
-                const playableAssets = assets.filter(asset => {
-                    const assetUrl = asset?.url || '';
-                    return assetUrl && !/\.m3u8(\?|$)/i.test(assetUrl);
-                });
-
-                let chosenAsset = null;
-
-                if (kind === 'audio') {
-                    chosenAsset =
-                        playableAssets.find(asset => /mp3_audio/i.test(asset?.type || '')) ||
-                        playableAssets.find(asset => (asset?.ext || '').toLowerCase() === 'mp3') ||
-                        playableAssets.find(asset => /original/i.test(asset?.type || ''));
-                } else {
-                    chosenAsset =
-                        playableAssets.find(asset => /(hd_mp4_video|md_mp4_video|sd_mp4_video|mp4_video|iphone_video)/i.test(asset?.type || '')) ||
-                        playableAssets.find(asset => (asset?.ext || '').toLowerCase() === 'mp4') ||
-                        playableAssets.find(asset => /original/i.test(asset?.type || '')) ||
-                        playableAssets[0];
-                }
-
-                return chosenAsset?.url || '';
+                return selectBestWistiaAsset(assets, kind)?.url || '';
             });
 
-            portfolioWistiaPlayableCache.set(cacheKey, promise);
+            wistiaPlayableCache.set(cacheKey, promise);
             return promise;
         }
 
@@ -348,8 +432,8 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
             const mediaId = getWistiaMediaId(src);
             if (!mediaId) return '';
 
-            if (portfolioWistiaThumbCache.has(mediaId)) {
-                return portfolioWistiaThumbCache.get(mediaId);
+            if (wistiaThumbCache.has(mediaId)) {
+                return wistiaThumbCache.get(mediaId);
             }
 
             const canonicalUrl = getCanonicalWistiaUrl(src);
@@ -369,7 +453,7 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
                     return '';
                 });
 
-            portfolioWistiaThumbCache.set(mediaId, promise);
+            wistiaThumbCache.set(mediaId, promise);
             return promise;
         }
 
@@ -377,10 +461,13 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
             if (!video) return '';
 
             const existingSrc = video.currentSrc || video.getAttribute('src') || '';
-            if (existingSrc) return existingSrc;
+            if (existingSrc) {
+                if (video.dataset.wistiaSrc) applyDefaultWistiaVideoVolume(video);
+                return existingSrc;
+            }
 
-            if (portfolioVideoSourcePromises.has(video)) {
-                return portfolioVideoSourcePromises.get(video);
+            if (wistiaVideoSourcePromises.has(video)) {
+                return wistiaVideoSourcePromises.get(video);
             }
 
             const wistiaSrc = video.dataset.wistiaSrc || '';
@@ -390,12 +477,13 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
                 if (resolvedUrl) {
                     video.src = resolvedUrl;
                     video.dataset.resolvedSrc = resolvedUrl;
+                    applyDefaultWistiaVideoVolume(video);
                     video.load();
                 }
                 return resolvedUrl;
             });
 
-            portfolioVideoSourcePromises.set(video, sourcePromise);
+            wistiaVideoSourcePromises.set(video, sourcePromise);
             return sourcePromise;
         }
 
@@ -763,6 +851,7 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
 
             video.muted = false;
             video.dataset.hasStarted = 'false';
+            if (video.dataset.wistiaSrc) applyDefaultWistiaVideoVolume(video);
 
             if (video.dataset.wistiaSrc) {
                 resolveWistiaThumbnailUrl(video.dataset.wistiaSrc).then(thumbUrl => {
@@ -783,6 +872,10 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
                         : Promise.resolve(video.currentSrc || video.getAttribute('src') || '');
 
                     sourceReady.then(() => {
+                        if (video.dataset.wistiaSrc) {
+                            applyDefaultWistiaVideoVolume(video);
+                        }
+
                         if (video.dataset.hasStarted !== 'true') {
                             try {
                                 video.currentTime = 0;
@@ -1875,132 +1968,6 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
 
             const overlayVideo = document.getElementById('overlay-video');
             const transitionVideos = Array.from(document.querySelectorAll('.transition-video'));
-            const wistiaMediaCache = new Map();
-            const wistiaThumbCache = new Map();
-            const wistiaPlayableCache = new Map();
-            const videoSourcePromises = new WeakMap();
-
-            function getCanonicalWistiaUrl(src) {
-                const rawSrc = String(src || '').trim();
-                const mediaId = getWistiaMediaId(rawSrc);
-                if (!mediaId) return rawSrc;
-                return /^https?:/i.test(rawSrc) ? rawSrc : `https://jesielpsd.wistia.com/medias/${mediaId}`;
-            }
-
-            async function fetchWistiaMediaData(src) {
-                const mediaId = getWistiaMediaId(src);
-                if (!mediaId) return null;
-
-                if (!wistiaMediaCache.has(mediaId)) {
-                    wistiaMediaCache.set(
-                        mediaId,
-                        fetch(`https://fast.wistia.com/embed/medias/${mediaId}.json`)
-                            .then(response => {
-                                if (!response.ok) throw new Error(`Wistia media ${mediaId} unavailable`);
-                                return response.json();
-                            })
-                            .catch(error => {
-                                console.error('Error fetching Wistia media data:', mediaId, error);
-                                return null;
-                            })
-                    );
-                }
-
-                return wistiaMediaCache.get(mediaId);
-            }
-
-            async function resolveWistiaPlayableUrl(src, kind = 'video') {
-                const mediaId = getWistiaMediaId(src);
-                if (!mediaId) return String(src || '');
-
-                const cacheKey = `${kind}:${mediaId}`;
-                if (wistiaPlayableCache.has(cacheKey)) {
-                    return wistiaPlayableCache.get(cacheKey);
-                }
-
-                const promise = fetchWistiaMediaData(src).then(data => {
-                    const assets = Array.isArray(data?.media?.assets) ? data.media.assets : [];
-                    const playableAssets = assets.filter(asset => {
-                        const assetUrl = asset?.url || '';
-                        return assetUrl && !/\.m3u8(\?|$)/i.test(assetUrl);
-                    });
-
-                    let chosenAsset = null;
-
-                    if (kind === 'audio') {
-                        chosenAsset =
-                            playableAssets.find(asset => /mp3_audio/i.test(asset?.type || '')) ||
-                            playableAssets.find(asset => (asset?.ext || '').toLowerCase() === 'mp3') ||
-                            playableAssets.find(asset => /original/i.test(asset?.type || ''));
-                    } else {
-                        chosenAsset =
-                            playableAssets.find(asset => /(hd_mp4_video|md_mp4_video|sd_mp4_video|mp4_video|iphone_video)/i.test(asset?.type || '')) ||
-                            playableAssets.find(asset => (asset?.ext || '').toLowerCase() === 'mp4') ||
-                            playableAssets.find(asset => /original/i.test(asset?.type || '')) ||
-                            playableAssets[0];
-                    }
-
-                    return chosenAsset?.url || '';
-                });
-
-                wistiaPlayableCache.set(cacheKey, promise);
-                return promise;
-            }
-
-            async function resolveWistiaThumbnailUrl(src) {
-                const mediaId = getWistiaMediaId(src);
-                if (!mediaId) return '';
-
-                if (wistiaThumbCache.has(mediaId)) {
-                    return wistiaThumbCache.get(mediaId);
-                }
-
-                const canonicalUrl = getCanonicalWistiaUrl(src);
-                const promise = fetch(`https://fast.wistia.net/oembed?url=${encodeURIComponent(canonicalUrl)}`)
-                    .then(response => {
-                        if (!response.ok) throw new Error(`Wistia thumb ${mediaId} unavailable`);
-                        return response.json();
-                    })
-                    .then(data => {
-                        const thumbUrl = data?.thumbnail_url ||
-                            data?.url ||
-                            (typeof data?.html === 'string' ? (data.html.match(/src="([^"]+)"/i)?.[1] || '') : '');
-                        return thumbUrl ? thumbUrl.replace(/^http:\/\//i, 'https://') : '';
-                    })
-                    .catch(error => {
-                        console.error('Error fetching Wistia thumbnail:', mediaId, error);
-                        return '';
-                    });
-
-                wistiaThumbCache.set(mediaId, promise);
-                return promise;
-            }
-
-            async function ensureVideoSource(video) {
-                if (!video) return '';
-
-                const existingSrc = video.currentSrc || video.getAttribute('src') || '';
-                if (existingSrc) return existingSrc;
-
-                if (videoSourcePromises.has(video)) {
-                    return videoSourcePromises.get(video);
-                }
-
-                const wistiaSrc = video.dataset.wistiaSrc || '';
-                if (!wistiaSrc) return '';
-
-                const sourcePromise = resolveWistiaPlayableUrl(wistiaSrc, 'video').then(resolvedUrl => {
-                    if (resolvedUrl) {
-                        video.src = resolvedUrl;
-                        video.dataset.resolvedSrc = resolvedUrl;
-                        video.load();
-                    }
-                    return resolvedUrl;
-                });
-
-                videoSourcePromises.set(video, sourcePromise);
-                return sourcePromise;
-            }
 
             function primeTransitionVideo(video) {
                 if (!video) return;
@@ -2089,7 +2056,7 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
                         video.currentTime = 0;
                     } catch (_) { }
                     video.muted = false;
-                    video.volume = 1;
+                    applyDefaultWistiaVideoVolume(video);
                     video.play().catch(() => {
                         console.log('Hover sound blocked by browser until user interaction.');
                         video.muted = true;
@@ -2131,6 +2098,7 @@ const BUILD_VERSION = '2026-03-31-portfolio-fix-18';
 
                         audio = new Audio(resolvedSrc);
                         audio.preload = 'auto';
+                        applyDefaultWistiaAudioVolume(audio);
                         audio.addEventListener('ended', () => {
                             item.classList.remove('playing');
                             playBtn.innerHTML = playIcon;
